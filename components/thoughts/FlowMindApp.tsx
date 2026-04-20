@@ -7,6 +7,7 @@ import {
   MentalLoadMeter,
 } from "@/components/thoughts";
 import { AnalyticsPanel } from "@/components/analytics";
+import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { Brain } from "lucide-react";
 
 /**
@@ -34,7 +35,10 @@ export function FlowMindApp() {
             </div>
           </div>
 
-          <AddThoughtDialog />
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <AddThoughtDialog />
+          </div>
         </div>
 
         {/* Mental load indicator */}
