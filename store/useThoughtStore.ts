@@ -6,7 +6,14 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
-import type { Thought, ThoughtType, FilterType, PriorityType } from "@/types";
+import type {
+  Thought,
+  ThoughtType,
+  FilterType,
+  PriorityType,
+  DailySnapshot,
+} from "@/types";
+import { buildSnapshot, toDateKey } from "@/lib/analytics";
 
 // ────────────────────────────────────────────────────────────
 // 1. Store shape (state + actions)
@@ -19,6 +26,10 @@ interface ThoughtState {
   searchQuery: string;
   mentalLoad: number;
 
+  // ── Analytics state ─────────────────────────────────────
+  /** Persisted daily snapshots — oldest first. */
+  dailySnapshots: DailySnapshot[];
+
   // ── Actions ─────────────────────────────────────────────
   addThought: (thought: Omit<Thought, "id" | "createdAt">) => void;
   removeThought: (id: string) => void;
@@ -27,22 +38,13 @@ interface ThoughtState {
   setFilter: (filter: FilterType) => void;
   setSearchQuery: (query: string) => void;
   calculateMentalLoad: () => void;
+
+  /** Records (or updates) today's snapshot. Call on mount and after mutations. */
+  recordDailySnapshot: () => void;
 }
 
 // ────────────────────────────────────────────────────────────
 // 2. Mental-load algorithm
-// ────────────────────────────────────────────────────────────
-//
-// Each thought adds a base weight of 1.  Priority multiplies
-// that weight so that high-priority items feel "heavier":
-//
-//   low    → ×1   (1 point)
-//   medium → ×2   (2 points)
-//   high   → ×3   (3 points)
-//
-// The final score is the simple sum.  This keeps the metric
-// intuitive while still reflecting that a handful of urgent
-// thoughts can weigh more than many trivial ones.
 // ────────────────────────────────────────────────────────────
 
 const PRIORITY_WEIGHT: Record<PriorityType, number> = {
@@ -60,8 +62,6 @@ function computeMentalLoad(thoughts: Thought[]): number {
 // ────────────────────────────────────────────────────────────
 
 function generateId(): string {
-  // `crypto.randomUUID()` is available in all modern browsers and Node ≥ 19.
-  // Fallback to a simple timestamp-based id for SSR / older runtimes.
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
     return crypto.randomUUID();
   }
@@ -69,7 +69,7 @@ function generateId(): string {
 }
 
 // ────────────────────────────────────────────────────────────
-// 4. Mock data (seeded so the store isn't empty on first run)
+// 4. Mock data
 // ────────────────────────────────────────────────────────────
 
 const MOCK_THOUGHTS: Thought[] = [
@@ -124,7 +124,48 @@ const MOCK_THOUGHTS: Thought[] = [
 ];
 
 // ────────────────────────────────────────────────────────────
-// 5. Store creation
+// 5. Seed snapshots — 6 days of history for a realistic chart
+// ────────────────────────────────────────────────────────────
+
+function seedSnapshots(): DailySnapshot[] {
+  const seeds: Array<{
+    daysAgo: number;
+    load: number;
+    thoughtCount: number;
+    breakdown: Record<ThoughtType, number>;
+  }> = [
+    { daysAgo: 6, load: 8,  thoughtCount: 4, breakdown: { idea: 1, task: 2, concern: 0, noise: 1 } },
+    { daysAgo: 5, load: 11, thoughtCount: 5, breakdown: { idea: 1, task: 2, concern: 1, noise: 1 } },
+    { daysAgo: 4, load: 7,  thoughtCount: 4, breakdown: { idea: 2, task: 1, concern: 0, noise: 1 } },
+    { daysAgo: 3, load: 14, thoughtCount: 6, breakdown: { idea: 1, task: 3, concern: 1, noise: 1 } },
+    { daysAgo: 2, load: 10, thoughtCount: 5, breakdown: { idea: 2, task: 2, concern: 1, noise: 0 } },
+    { daysAgo: 1, load: 9,  thoughtCount: 5, breakdown: { idea: 1, task: 2, concern: 1, noise: 1 } },
+  ];
+
+  return seeds.map(({ daysAgo, load, thoughtCount, breakdown }) => {
+    const d = new Date();
+    d.setDate(d.getDate() - daysAgo);
+    return { date: toDateKey(d), load, thoughtCount, breakdown };
+  });
+}
+
+// ────────────────────────────────────────────────────────────
+// 6. Snapshot upsert helper
+// ────────────────────────────────────────────────────────────
+
+function upsertSnapshot(
+  existing: DailySnapshot[],
+  next: DailySnapshot,
+): DailySnapshot[] {
+  const idx = existing.findIndex((s) => s.date === next.date);
+  if (idx === -1) return [...existing, next];
+  const updated = [...existing];
+  updated[idx] = next;
+  return updated;
+}
+
+// ────────────────────────────────────────────────────────────
+// 7. Store creation
 // ────────────────────────────────────────────────────────────
 
 export const useThoughtStore = create<ThoughtState>()(
@@ -135,6 +176,7 @@ export const useThoughtStore = create<ThoughtState>()(
       filter: "all",
       searchQuery: "",
       mentalLoad: computeMentalLoad(MOCK_THOUGHTS),
+      dailySnapshots: seedSnapshots(),
 
       // ── Actions ─────────────────────────────────────────
 
@@ -144,12 +186,13 @@ export const useThoughtStore = create<ThoughtState>()(
           id: generateId(),
           createdAt: new Date(),
         };
-
         set((state) => {
           const updated = [newThought, ...state.thoughts];
+          const snapshot = buildSnapshot(updated);
           return {
             thoughts: updated,
             mentalLoad: computeMentalLoad(updated),
+            dailySnapshots: upsertSnapshot(state.dailySnapshots, snapshot),
           };
         });
       },
@@ -157,9 +200,11 @@ export const useThoughtStore = create<ThoughtState>()(
       removeThought: (id) => {
         set((state) => {
           const updated = state.thoughts.filter((t) => t.id !== id);
+          const snapshot = buildSnapshot(updated);
           return {
             thoughts: updated,
             mentalLoad: computeMentalLoad(updated),
+            dailySnapshots: upsertSnapshot(state.dailySnapshots, snapshot),
           };
         });
       },
@@ -169,9 +214,11 @@ export const useThoughtStore = create<ThoughtState>()(
           const updated = state.thoughts.map((t) =>
             t.id === id ? { ...t, ...fields } : t,
           );
+          const snapshot = buildSnapshot(updated);
           return {
             thoughts: updated,
             mentalLoad: computeMentalLoad(updated),
+            dailySnapshots: upsertSnapshot(state.dailySnapshots, snapshot),
           };
         });
       },
@@ -185,22 +232,23 @@ export const useThoughtStore = create<ThoughtState>()(
       },
 
       setFilter: (filter) => set({ filter }),
-
       setSearchQuery: (query) => set({ searchQuery: query }),
 
       calculateMentalLoad: () => {
         const load = computeMentalLoad(get().thoughts);
         set({ mentalLoad: load });
       },
+
+      recordDailySnapshot: () => {
+        const { thoughts, dailySnapshots } = get();
+        const snapshot = buildSnapshot(thoughts);
+        set({ dailySnapshots: upsertSnapshot(dailySnapshots, snapshot) });
+      },
     }),
     {
-      // ── Persist configuration ─────────────────────────
       name: "flowmind-thoughts",
 
       storage: createJSONStorage(() => localStorage, {
-        // Custom reviver: rehydrate `createdAt` strings back into Date objects.
-        // Without this, dates would remain as plain ISO strings after reading
-        // from localStorage, breaking any Date method calls downstream.
         reviver: (_key: string, value: unknown) => {
           if (
             typeof value === "string" &&
@@ -211,21 +259,17 @@ export const useThoughtStore = create<ThoughtState>()(
           }
           return value;
         },
-
-        // Custom replacer: serialise Dates to ISO-8601 strings.
-        // (JSON.stringify already does this, but being explicit avoids
-        // surprises with exotic Date subclasses.)
         replacer: (_key: string, value: unknown) => {
           if (value instanceof Date) return value.toISOString();
           return value;
         },
       }),
 
-      // Only persist state that matters across sessions.
-      // `filter` and `searchQuery` are ephemeral UI state.
+      // dailySnapshots now persisted alongside thoughts
       partialize: (state) => ({
         thoughts: state.thoughts,
         mentalLoad: state.mentalLoad,
+        dailySnapshots: state.dailySnapshots,
       }),
     },
   ),

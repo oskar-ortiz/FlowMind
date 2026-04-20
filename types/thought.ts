@@ -55,3 +55,21 @@ export interface Thought {
   /** User-toggled flag to pin / highlight a thought. */
   isImportant: boolean;
 }
+
+/**
+ * A single daily mental-load snapshot.
+ * Stored as a time-series array for trend analysis and charting.
+ *
+ * `date` is an ISO-8601 date string (YYYY-MM-DD) — timezone-stable,
+ * sortable, and de-serialisable without a reviver.
+ */
+export interface DailySnapshot {
+  /** ISO date string: "2026-04-20" */
+  date: string;
+  /** Mental load score for that day. */
+  load: number;
+  /** Total thought count at that point in time. */
+  thoughtCount: number;
+  /** Breakdown by type for richer analytics. */
+  breakdown: Record<ThoughtType, number>;
+}

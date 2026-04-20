@@ -6,6 +6,7 @@ import {
   ThoughtList,
   MentalLoadMeter,
 } from "@/components/thoughts";
+import { AnalyticsPanel } from "@/components/analytics";
 import { Brain } from "lucide-react";
 
 /**
@@ -44,9 +45,19 @@ export function FlowMindApp() {
       </header>
 
       {/* ── Content ─────────────────────────────────── */}
-      <main className="flex-1">
-        <ThoughtList />
+      <main className="grid flex-1 items-start gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <ThoughtList />
+        </div>
+        <aside className="hidden lg:block space-y-6">
+          <AnalyticsPanel />
+        </aside>
       </main>
+
+      {/* Analytics for mobile - bottom of list */}
+      <aside className="block lg:hidden">
+        <AnalyticsPanel />
+      </aside>
 
       {/* ── Footer ──────────────────────────────────── */}
       <footer className="border-t pt-4 text-center text-xs text-muted-foreground">
